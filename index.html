@@ -29,7 +29,7 @@
 </head>
 <body>
   <main class="wrap">
-    <div class="heading"><h1>Reel Preview</h1><span class="label">Latest version</span></div>
+    <div class="heading"><h1>Reel Preview</h1><span class="label" id="revisionLabel">Loading verified version…</span></div>
     <div class="stage">
       <video id="reel" autoplay muted playsinline controls preload="auto" poster="poster.jpg" aria-label="Latest motivational Reel">
         <source id="videoSrc" src="latest.mp4" type="video/mp4">
@@ -40,10 +40,12 @@
       <button type="button" id="sound" class="primary">🔊 Turn sound on</button>
       <button type="button" id="restart">↻ Replay</button>
       <button type="button" id="fullscreen">⛶ Fullscreen</button>
+      <button type="button" id="refresh">↻ Check latest revision</button>
     </div>
-    <p id="status" role="status" aria-live="polite">Opening preview…</p>
+    <p id="status" role="status" aria-live="polite">Checking the most recently deployed video…</p>
+    <p class="hint" id="versionText" aria-live="polite">Version verification in progress.</p>
     <p id="error" class="warning" role="alert"></p>
-    <p class="hint">The video begins automatically with sound muted, as required by Chrome autoplay rules. Click “Turn sound on” to hear it. This page updates whenever latest.mp4 is replaced on your preview site.</p>
+    <p class="hint">The video begins automatically with sound muted, as required by Chrome autoplay rules. Click “Turn sound on” to hear it. This page verifies a unique SHA-256 revision before starting the video, so you can tell whether you are seeing the new or an older version. This is a preview for approval only; it does not post to Instagram.</p>
   </main>
   <script>
     (() => {
@@ -53,15 +55,51 @@
       const status = document.getElementById('status');
       const error = document.getElementById('error');
       const src = document.getElementById('videoSrc');
-      // Refresh the actual media each visit, so a newly generated version appears.
-      src.src = 'latest.mp4?v=' + Date.now();
-      reel.load();
+      const revisionLabel = document.getElementById('revisionLabel');
+      const versionText = document.getElementById('versionText');
       const report = message => { status.textContent = message; };
+      const checkVersion = async () => {
+        report('Checking the deployed MP4 version…');
+        error.style.display = 'none';
+        try {
+          const manifestResponse = await fetch('preview-version.json?check=' + Date.now(), {cache: 'no-store'});
+          if (!manifestResponse.ok) throw new Error('A verified preview version is not deployed yet.');
+          const manifest = await manifestResponse.json();
+          if (!/^[a-f0-9]{16}$/.test(manifest.revision) || !Number.isFinite(manifest.video_bytes)) {
+            throw new Error('The preview version marker is incomplete.');
+          }
+          const mediaURL = 'latest.mp4?revision=' + encodeURIComponent(manifest.revision);
+          const head = await fetch(mediaURL, { method: 'HEAD', cache: 'no-store' });
+          if (!head.ok) throw new Error('The new video is not yet available.');
+          const actualBytes = Number(head.headers.get('Content-Length'));
+          if (actualBytes && actualBytes !== manifest.video_bytes) {
+            throw new Error('The player still has an older MP4. The newest GitHub Pages deployment is processing.');
+          }
+          if (!actualBytes) {
+            throw new Error('Could not verify the deployed MP4 size. Please retry once the Pages deployment finishes.');
+          }
+          src.src = mediaURL;
+          reel.poster = 'poster.jpg?revision=' + encodeURIComponent(manifest.revision);
+          revisionLabel.textContent = 'Reel 01 · Rev ' + manifest.revision.slice(0, 8);
+          versionText.textContent = 'New preview: ' + manifest.label + ' · ' + manifest.generated_utc + ' · Draft awaiting approval';
+          reel.load();
+          report('Verified new version · press Play / Turn sound on');
+        } catch (err) {
+          reel.pause();
+          src.removeAttribute('src');
+          reel.load();
+          revisionLabel.textContent = 'Update not ready';
+          versionText.textContent = 'No video displayed: the latest version could not be verified.';
+          error.style.display = 'block';
+          error.textContent = err.message + ' Use “Check latest revision” once deployment finishes.';
+          report('Waiting for verified updated Reel');
+        }
+      };
       const play = async () => {
         try { await reel.play(); report(reel.muted ? 'Playing · sound is off' : 'Playing · sound on'); }
         catch (_) { report('Chrome paused autoplay. Tap the video to play.'); }
       };
-      reel.addEventListener('canplay', play, { once:true });
+      reel.addEventListener('canplay', play);
       reel.addEventListener('playing', () => report(reel.muted ? 'Playing · sound is off' : 'Playing · sound on'));
       reel.addEventListener('pause', () => { if (!reel.ended) report('Paused'); });
       reel.addEventListener('ended', () => report('Finished · tap Replay to watch again'));
@@ -70,6 +108,7 @@
         error.textContent = 'The Reel could not load. Ensure latest.mp4 has been uploaded next to index.html and the GitHub Pages site has finished publishing.';
         report('Video unavailable');
       });
+      document.getElementById('refresh').addEventListener('click', checkVersion);
       sound.addEventListener('click', async () => {
         reel.muted = !reel.muted;
         sound.textContent = reel.muted ? '🔊 Turn sound on' : '🔇 Mute';
@@ -82,6 +121,7 @@
         else if (reel.requestFullscreen) await reel.requestFullscreen();
         else if (reel.webkitEnterFullscreen) reel.webkitEnterFullscreen();
       });
+      checkVersion();
     })();
   </script>
 </body>
